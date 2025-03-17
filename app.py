@@ -7,7 +7,6 @@ import requests
 from PIL import Image
 from copy import deepcopy
 import math
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Filstier – tilpas efter behov
 MAPPING_FILE_PATH = "mapping-file.xlsx"
@@ -131,10 +130,10 @@ def process_stock_rts_alternative(mapping_row, stock_df):
     """
     Logik for {{Product RTS}}:
       1. Hent 'ProductKey' fra mapping_row.
-      2. Filtrer stock_df, så kun rækker med en matchende 'productkey' (normaliseret) er med.
-      3. Filtrer herefter, så kun rækker med ikke-tom 'rts' er med.
+      2. Filtrer stock_df, så kun rækker med en matchende 'productkey' (efter normalisering) er med.
+      3. Filtrer herefter, så kun rækker med en ikke-tom 'rts' er med.
       4. Udtræk unikke værdier fra kolonnen 'variantname'.
-      5. Gruppér disse med group_variant_names() med linjeskift som gruppe-separator.
+      5. Gruppér disse med group_variant_names() med linjeskift som separator.
       6. Returnér resultatet.
     """
     product_key = mapping_row.get("productkey", "")
@@ -164,7 +163,7 @@ def process_stock_mto_alternative(mapping_row, stock_df):
     Logik for {{Product MTO}}:
       1. Hent 'ProductKey' fra mapping_row.
       2. Filtrer stock_df, så kun rækker med en matchende 'productkey' er med.
-      3. Filtrer herefter, så kun rækker med ikke-tom 'mto' er med.
+      3. Filtrer herefter, så kun rækker med en ikke-tom 'mto' er med.
       4. Udtræk unikke værdier fra kolonnen 'variantname'.
       5. Gruppér disse med group_variant_names() med ", " som separator for både elementer og grupper.
       6. Returnér resultatet.
@@ -191,7 +190,6 @@ def process_stock_mto_alternative(mapping_row, stock_df):
     unique_variant_names = list(dict.fromkeys(variant_names))
     return group_variant_names(unique_variant_names, group_item_sep=", ", group_sep=", ")
 
-# --- Caching & Parallel Image Fetching ---
 @st.cache_data(show_spinner=False)
 def fetch_and_process_image_cached(url, quality=70, max_size=(1200, 1200)):
     try:
@@ -211,11 +209,9 @@ def fetch_and_process_image_cached(url, quality=70, max_size=(1200, 1200)):
 
 def replace_image_placeholders_parallel(slide, image_values):
     """
-    Erstatter billedplaceholders i en slide ved at hente billeder parallelt med ThreadPoolExecutor.
-    For hvert billede i image_values, hentes billedet (med caching) parallelt.
-    Billedet indsættes, hvis det kan hentes.
+    Erstatter billedplaceholders i en slide ved at hente billeder parallelt.
     """
-    # Lav en liste over (placeholder, url) par
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     tasks = []
     for ph in IMAGE_PLACEHOLDERS_ORIG:
         norm_ph = normalize_text(ph)
@@ -229,13 +225,11 @@ def replace_image_placeholders_parallel(slide, image_values):
         for future in as_completed(future_to_ph):
             ph = future_to_ph[future]
             try:
-                img_stream = future.result()
-                results[ph] = img_stream
+                results[ph] = future.result()
             except Exception as exc:
                 st.warning(f"Fejl ved parallel billedhentning for {ph}: {exc}")
                 results[ph] = None
 
-    # Indsæt billederne i de relevante placeholder shapes
     for shape in slide.shapes:
         if shape.has_text_frame:
             tekst = shape.text
@@ -258,7 +252,6 @@ def replace_image_placeholders_parallel(slide, image_values):
                         shape.text = ""
                     break
 
-# --- Standard erstatningsfunktion for hyperlinks og tekst ---
 def replace_hyperlink_placeholders(slide, hyperlink_values):
     import re
     for shape in slide.shapes:
@@ -314,7 +307,7 @@ def main():
     st.info("Validerer filer...")
     progress_bar = st.progress(10)
 
-    # Indlæs og normalisér mapping-fil
+    # Indlæs mapping-fil
     try:
         mapping_df = pd.read_excel(MAPPING_FILE_PATH)
         mapping_df.columns = [normalize_col(col) for col in mapping_df.columns]
@@ -332,7 +325,7 @@ def main():
     progress_bar.progress(30)
     MAPPING_PRODUCT_CODE_KEY = normalize_col("{{Product code}}")
 
-    # Indlæs og normalisér stock-fil
+    # Indlæs stock-fil
     try:
         stock_df = pd.read_excel(STOCK_FILE_PATH)
         stock_df.columns = [normalize_col(col) for col in stock_df.columns]
@@ -366,68 +359,76 @@ def main():
     template_slide = prs.slides[0]
     prs.slides._sldIdLst.remove(prs.slides._sldIdLst[0])
 
-    # Batching: behandle 10 varer ad gangen, hvis meget lang liste
+    missing_items = []  # Liste over varenummer, der ikke findes i mapping
     total_products = len(user_df)
+    
+    # Batch-proces (10 pr. batch)
     batch_size = 10
     num_batches = math.ceil(total_products / batch_size)
-    
     for batch_index in range(num_batches):
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for index, product in batch_df.iterrows():
             item_no = product["Item no"]
             slide = duplicate_slide(prs, template_slide)
-
+            
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
-                st.warning(f"Ingen match fundet i mapping-fil for Item no: {item_no}")
-                continue
-
-            placeholder_texts = {}
-            for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
-                norm_ph = normalize_col(ph)
-                value = mapping_row.get(norm_ph, "")
-                if pd.isna(value):
-                    value = ""
-                # For {{Product code}}, {{Product name}}, {{Product country of origin}} indsættes data på samme linje.
-                # For {{CertificateName}} og {{Product Consumption COM}} indsættes et ekstra linjeskift før data.
-                if ph in ("{{Product code}}", "{{Product name}}", "{{Product country of origin}}"):
-                    placeholder_texts[ph] = f"{label} {value}"
-                elif ph in ("{{CertificateName}}", "{{Product Consumption COM}}"):
-                    placeholder_texts[ph] = f"{label}\n\n{value}"
-                else:
-                    placeholder_texts[ph] = f"{label}\n{value}"
-
-            product_code = mapping_row.get(MAPPING_PRODUCT_CODE_KEY, "")
-            rts_text = process_stock_rts_alternative(mapping_row, stock_df)
-            mto_text = process_stock_mto_alternative(mapping_row, stock_df)
-            # Tilføj ekstra linjeskift før data for disse felter
-            placeholder_texts["{{Product RTS}}"] = f"Product in stock versions:\n\n{rts_text}"
-            placeholder_texts["{{Product MTO}}"] = f"Avilable for made to order:\n\n{mto_text}"
-
-            replace_text_placeholders(slide, placeholder_texts)
-
-            hyperlink_vals = {}
-            for ph, display_text in HYPERLINK_PLACEHOLDERS_ORIG.items():
-                norm_ph = normalize_col(ph)
-                url = mapping_row.get(norm_ph, "")
-                if pd.isna(url):
-                    url = ""
-                hyperlink_vals[ph] = (display_text, url)
-            replace_hyperlink_placeholders(slide, hyperlink_vals)
-
-            image_vals = {}
-            for ph in IMAGE_PLACEHOLDERS_ORIG:
-                norm_ph = normalize_col(ph)
-                url = mapping_row.get(norm_ph, "")
-                if pd.isna(url):
-                    url = ""
-                image_vals[ph] = url
-            # Erstat billeder parallelt
-            replace_image_placeholders_parallel(slide, image_vals)
-        
+                missing_items.append(item_no)
+                # Opret en slide med kun Product code feltet udfyldt med varenummeret
+                placeholder_texts = {}
+                for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
+                    if ph == "{{Product code}}":
+                        placeholder_texts[ph] = f"{label} {item_no}"
+                    else:
+                        placeholder_texts[ph] = f"{label}"
+                # For RTS og MTO indsættes en meddelelse
+                placeholder_texts["{{Product RTS}}"] = "Product in stock versions:\n\nNo mapping found"
+                placeholder_texts["{{Product MTO}}"] = "Avilable for made to order:\n\nNo mapping found"
+                replace_text_placeholders(slide, placeholder_texts)
+                replace_hyperlink_placeholders(slide, {})
+                # Vi beholder sliden
+            else:
+                placeholder_texts = {}
+                for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
+                    norm_ph = normalize_col(ph)
+                    value = mapping_row.get(norm_ph, "")
+                    if pd.isna(value):
+                        value = ""
+                    if ph in ("{{Product code}}", "{{Product name}}", "{{Product country of origin}}"):
+                        placeholder_texts[ph] = f"{label} {value}"
+                    elif ph in ("{{CertificateName}}", "{{Product Consumption COM}}"):
+                        placeholder_texts[ph] = f"{label}\n\n{value}"
+                    else:
+                        placeholder_texts[ph] = f"{label}\n{value}"
+                
+                product_code = mapping_row.get(MAPPING_PRODUCT_CODE_KEY, "")
+                rts_text = process_stock_rts_alternative(mapping_row, stock_df)
+                mto_text = process_stock_mto_alternative(mapping_row, stock_df)
+                placeholder_texts["{{Product RTS}}"] = f"Product in stock versions:\n\n{rts_text}"
+                placeholder_texts["{{Product MTO}}"] = f"Avilable for made to order:\n\n{mto_text}"
+                
+                replace_text_placeholders(slide, placeholder_texts)
+                
+                hyperlink_vals = {}
+                for ph, display_text in HYPERLINK_PLACEHOLDERS_ORIG.items():
+                    norm_ph = normalize_col(ph)
+                    url = mapping_row.get(norm_ph, "")
+                    if pd.isna(url):
+                        url = ""
+                    hyperlink_vals[ph] = (display_text, url)
+                replace_hyperlink_placeholders(slide, hyperlink_vals)
+                
+                image_vals = {}
+                for ph in IMAGE_PLACEHOLDERS_ORIG:
+                    norm_ph = normalize_col(ph)
+                    url = mapping_row.get(norm_ph, "")
+                    if pd.isna(url):
+                        url = ""
+                    image_vals[ph] = url
+                replace_image_placeholders_parallel(slide, image_vals)
         current_progress = 70 + int((batch_index + 1) / num_batches * 30)
         progress_bar.progress(current_progress)
-
+    
     ppt_io = io.BytesIO()
     try:
         prs.save(ppt_io)
@@ -440,6 +441,9 @@ def main():
     st.download_button("Download PowerPoint", ppt_io,
                        file_name="generated_presentation.pptx",
                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+    
+    if missing_items:
+        st.text_area("Manglende varenumre (kopier her):", value="\n".join(missing_items), height=100)
     
     st.session_state.generated_ppt = ppt_io
 
