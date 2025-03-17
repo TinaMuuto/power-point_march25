@@ -265,165 +265,24 @@ def duplicate_slide(prs, slide):
         new_slide.shapes._spTree.append(deepcopy(shape._element))
     return new_slide
 
+# --- En simpel funktion til at opdatere progress-loggen ---
+def update_progress_log(new_message):
+    if "progress_log" not in st.session_state:
+        st.session_state.progress_log = []
+    st.session_state.progress_log.append(new_message)
+    # Behold kun de seneste 5 beskeder
+    st.session_state.progress_log = st.session_state.progress_log[-5:]
+    # Vis beskederne i en tekstboks med grå stil
+    st.markdown(f"<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>{'<br>'.join(st.session_state.progress_log)}</div>", unsafe_allow_html=True)
+
 # --- Main Streamlit App ---
 def main():
-    status = st.empty()  # Én enkelt status-placeholder
-    status.text("Starter appen...")
+    # Opret en status-placeholder til progress-loggen
+    st.session_state.progress_log = []  # nulstil loggen
     st.title("PowerPoint Generator App")
     st.write("Indsæt varenumre (Item no) – ét pr. linje:")
     st.info("Bemærk: Indsæt varenumre uden ekstra mellemrum omkring bindestreger, f.eks. '03084' eller '12345-AB'.")
     
     pasted_text = st.text_area("Indsæt varenumre her", height=200)
     if not pasted_text.strip():
-        status.text("Vent: Indsæt venligst varenumre i tekstfeltet.")
-        return
-
-    varenumre = [line.strip() for line in pasted_text.splitlines() if line.strip()]
-    if not varenumre:
-        status.text("Ingen gyldige varenumre fundet.")
-        return
-
-    user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
-    status.text("Brugerdata oprettet!")
-    
-    status.text("Indlæser mapping-fil...")
-    progress_bar = st.progress(10)
-    try:
-        mapping_df = pd.read_excel(MAPPING_FILE_PATH)
-        mapping_df.columns = [normalize_col(col) for col in mapping_df.columns]
-    except Exception as e:
-        st.error(f"Fejl ved læsning af mapping-fil: {e}")
-        return
-    normalized_required_mapping_cols = [normalize_col(col) for col in REQUIRED_MAPPING_COLS_ORIG]
-    missing_mapping_cols = [req for req in normalized_required_mapping_cols if req not in mapping_df.columns]
-    if missing_mapping_cols:
-        st.error(f"Mapping-filen mangler kolonner: {missing_mapping_cols}.")
-        return
-    status.text("Mapping-fil indlæst!")
-    progress_bar.progress(30)
-    MAPPING_PRODUCT_CODE_KEY = normalize_col("{{Product code}}")
-    
-    status.text("Indlæser stock-fil...")
-    try:
-        stock_df = pd.read_excel(STOCK_FILE_PATH)
-        stock_df.columns = [normalize_col(col) for col in stock_df.columns]
-    except Exception as e:
-        st.error(f"Fejl ved læsning af stock-fil: {e}")
-        return
-    normalized_required_stock_cols = [normalize_col(col) for col in REQUIRED_STOCK_COLS_ORIG]
-    missing_stock_cols = [req for req in normalized_required_stock_cols if req not in stock_df.columns]
-    if missing_stock_cols:
-        st.error(f"Stock-filen mangler kolonner: {missing_stock_cols}.")
-        return
-    status.text("Stock-fil indlæst!")
-    progress_bar.progress(50)
-    
-    status.text("Indlæser PowerPoint-template...")
-    try:
-        prs = Presentation(TEMPLATE_FILE_PATH)
-    except Exception as e:
-        st.error(f"Fejl ved læsning af template-fil: {e}")
-        return
-    if len(prs.slides) < 1:
-        st.error("Template-filen skal indeholde mindst én slide.")
-        return
-    status.text("Template-fil indlæst!")
-    progress_bar.progress(70)
-    
-    template_slide = prs.slides[0]
-    prs.slides._sldIdLst.remove(prs.slides._sldIdLst[0])
-    
-    missing_items = []
-    total_products = len(user_df)
-    batch_size = 10
-    num_batches = math.ceil(total_products / batch_size)
-    status.text(f"Behandler {total_products} varer i {num_batches} batch(es)...")
-    
-    for batch_index in range(num_batches):
-        batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
-        status.text(f"Behandler batch {batch_index + 1} af {num_batches}...")
-        for idx, product in batch_df.iterrows():
-            global_index = batch_index * batch_size + idx + 1
-            status.text(f"Behandler vare {global_index} af {total_products}...")
-            item_no = product["Item no"]
-            slide = duplicate_slide(prs, template_slide)
-            mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
-            if mapping_row is None:
-                missing_items.append(item_no)
-                # Hvis ingen mapping, opret slide med kun Product code feltet udfyldt med varenummeret
-                placeholder_texts = {}
-                for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
-                    if ph == "{{Product code}}":
-                        placeholder_texts[ph] = f"{label} {item_no}"
-                    else:
-                        placeholder_texts[ph] = ""
-                placeholder_texts["{{Product RTS}}"] = "Product in stock versions:\n\n"
-                placeholder_texts["{{Product MTO}}"] = "Avilable for made to order:\n\n"
-                replace_text_placeholders(slide, placeholder_texts)
-                replace_hyperlink_placeholders(slide, {})
-            else:
-                placeholder_texts = {}
-                for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
-                    norm_ph = normalize_col(ph)
-                    value = mapping_row.get(norm_ph, "")
-                    if pd.isna(value) or not str(value).strip():
-                        placeholder_texts[ph] = ""
-                    else:
-                        if ph in ("{{Product code}}", "{{Product name}}", "{{Product country of origin}}"):
-                            placeholder_texts[ph] = f"{label} {value}"
-                        elif ph in ("{{CertificateName}}", "{{Product Consumption COM}}"):
-                            placeholder_texts[ph] = f"{label}\n\n{value}"
-                        else:
-                            placeholder_texts[ph] = f"{label}\n{value}"
-                
-                rts_text = process_stock_rts_alternative(mapping_row, stock_df)
-                mto_text = process_stock_mto_alternative(mapping_row, stock_df)
-                placeholder_texts["{{Product RTS}}"] = f"Product in stock versions:\n\n{rts_text}"
-                placeholder_texts["{{Product MTO}}"] = f"Avilable for made to order:\n\n{mto_text}"
-                
-                replace_text_placeholders(slide, placeholder_texts)
-                
-                hyperlink_vals = {}
-                for ph, display_text in HYPERLINK_PLACEHOLDERS_ORIG.items():
-                    norm_ph = normalize_col(ph)
-                    url = mapping_row.get(norm_ph, "")
-                    if pd.isna(url) or not str(url).strip():
-                        url = ""
-                    hyperlink_vals[ph] = (display_text, url)
-                replace_hyperlink_placeholders(slide, hyperlink_vals)
-                
-                image_vals = {}
-                for ph in IMAGE_PLACEHOLDERS_ORIG:
-                    norm_ph = normalize_col(ph)
-                    url = mapping_row.get(norm_ph, "")
-                    if pd.isna(url) or not str(url).strip():
-                        url = ""
-                    image_vals[ph] = url
-                replace_image_placeholders_parallel(slide, image_vals)
-        current_progress = 70 + int((batch_index + 1) / num_batches * 30)
-        progress_bar.progress(current_progress)
-    
-    status.text("Generering fuldført!")
-    ppt_io = io.BytesIO()
-    try:
-        prs.save(ppt_io)
-        ppt_io.seek(0)
-    except Exception as e:
-        st.error(f"Fejl ved gemning af PowerPoint: {e}")
-        return
-
-    status.text("PowerPoint genereret succesfuldt!")
-    st.download_button("Download PowerPoint", ppt_io,
-                       file_name="generated_presentation.pptx",
-                       mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-    
-    if missing_items:
-        st.text_area("Manglende varenumre (kopier her):", value="\n".join(missing_items), height=100)
-    
-    st.session_state.generated_ppt = ppt_io
-
-if __name__ == '__main__':
-    if 'generated_ppt' not in st.session_state:
-        st.session_state.generated_ppt = None
-    main()
-
+        update_progress_log("Vent: Inds
