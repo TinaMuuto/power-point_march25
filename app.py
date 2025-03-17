@@ -76,11 +76,6 @@ IMAGE_PLACEHOLDERS_ORIG = [
 
 # --- Funktion til gruppering af variantnavne ---
 def group_variant_names(variant_names, group_item_sep=", ", group_sep="\n"):
-    """
-    Grupperer en liste af variantnavne baseret på præfikset (delen før " - ").
-    For hver gruppe fjernes dubletter, og de resterende dele (efter " - ") sammenkædes med group_item_sep.
-    Grupperne sammenkædes derefter med group_sep.
-    """
     groups = {}
     for name in variant_names:
         if " - " in name:
@@ -104,17 +99,12 @@ def group_variant_names(variant_names, group_item_sep=", ", group_sep="\n"):
 
 # --- Hjælpefunktioner ---
 def normalize_text(s):
-    """Fjerner alle mellemrum (inklusiv ikke-brydende) og konverterer til små bogstaver."""
     return re.sub(r"\s+", "", str(s).replace("\u00A0", " ")).lower()
 
 def normalize_col(col):
     return normalize_text(col)
 
 def find_mapping_row(item_no, mapping_df, mapping_prod_key):
-    """
-    Finder den række i mapping_df, hvor kolonnen for produktkode (mapping_prod_key)
-    matcher 'Item no' (efter normalisering).
-    """
     norm_item = normalize_text(item_no)
     for idx, row in mapping_df.iterrows():
         code = row.get(mapping_prod_key, "")
@@ -129,15 +119,6 @@ def find_mapping_row(item_no, mapping_df, mapping_prod_key):
     return None
 
 def process_stock_rts_alternative(mapping_row, stock_df):
-    """
-    Logik for {{Product RTS}}:
-      1. Hent 'ProductKey' fra mapping_row.
-      2. Filtrer stock_df, så kun rækker med en matchende 'productkey' (normaliseret) er med.
-      3. Filtrer herefter, så kun rækker med en ikke-tom 'rts' er med.
-      4. Udtræk unikke værdier fra kolonnen 'variantname'.
-      5. Gruppér disse med group_variant_names() med linjeskift som gruppe-separator.
-      6. Returnér resultatet.
-    """
     product_key = mapping_row.get("productkey", "")
     if not product_key or pd.isna(product_key):
         return ""
@@ -161,15 +142,6 @@ def process_stock_rts_alternative(mapping_row, stock_df):
     return group_variant_names(unique_variant_names, group_item_sep=", ", group_sep="\n")
 
 def process_stock_mto_alternative(mapping_row, stock_df):
-    """
-    Logik for {{Product MTO}}:
-      1. Hent 'ProductKey' fra mapping_row.
-      2. Filtrer stock_df, så kun rækker med en matchende 'productkey' er med.
-      3. Filtrer herefter, så kun rækker med en ikke-tom 'mto' er med.
-      4. Udtræk unikke værdier fra kolonnen 'variantname'.
-      5. Gruppér disse med group_variant_names() med ", " som separator for både elementer og grupper.
-      6. Returnér resultatet.
-    """
     product_key = mapping_row.get("productkey", "")
     if not product_key or pd.isna(product_key):
         return ""
@@ -295,26 +267,27 @@ def duplicate_slide(prs, slide):
 
 # --- Main Streamlit App ---
 def main():
+    status = st.empty()  # Én enkelt status-placeholder
+    status.text("Starter appen...")
     st.title("PowerPoint Generator App")
     st.write("Indsæt varenumre (Item no) – ét pr. linje:")
     st.info("Bemærk: Indsæt varenumre uden ekstra mellemrum omkring bindestreger, f.eks. '03084' eller '12345-AB'.")
-    pasted_text = st.text_area("Indsæt varenumre her", height=200)
     
+    pasted_text = st.text_area("Indsæt varenumre her", height=200)
     if not pasted_text.strip():
-        st.info("Indsæt venligst varenumre i tekstfeltet.")
+        status.text("Vent: Indsæt venligst varenumre i tekstfeltet.")
         return
 
     varenumre = [line.strip() for line in pasted_text.splitlines() if line.strip()]
     if not varenumre:
-        st.error("Ingen gyldige varenumre fundet.")
+        status.text("Ingen gyldige varenumre fundet.")
         return
 
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
-    st.write("Brugerdata oprettet succesfuldt!")
-    st.info("Indlæser og validerer filer...")
-    progress_bar = st.progress(10)
+    status.text("Brugerdata oprettet!")
     
-    st.write("Indlæser mapping-fil...")
+    status.text("Indlæser mapping-fil...")
+    progress_bar = st.progress(10)
     try:
         mapping_df = pd.read_excel(MAPPING_FILE_PATH)
         mapping_df.columns = [normalize_col(col) for col in mapping_df.columns]
@@ -324,13 +297,13 @@ def main():
     normalized_required_mapping_cols = [normalize_col(col) for col in REQUIRED_MAPPING_COLS_ORIG]
     missing_mapping_cols = [req for req in normalized_required_mapping_cols if req not in mapping_df.columns]
     if missing_mapping_cols:
-        st.error(f"Mapping-filen mangler følgende kolonner (efter normalisering): {missing_mapping_cols}. Fundne kolonner: {mapping_df.columns.tolist()}")
+        st.error(f"Mapping-filen mangler kolonner: {missing_mapping_cols}.")
         return
-    st.write("Mapping-fil indlæst succesfuldt!")
+    status.text("Mapping-fil indlæst!")
     progress_bar.progress(30)
     MAPPING_PRODUCT_CODE_KEY = normalize_col("{{Product code}}")
     
-    st.write("Indlæser stock-fil...")
+    status.text("Indlæser stock-fil...")
     try:
         stock_df = pd.read_excel(STOCK_FILE_PATH)
         stock_df.columns = [normalize_col(col) for col in stock_df.columns]
@@ -340,12 +313,12 @@ def main():
     normalized_required_stock_cols = [normalize_col(col) for col in REQUIRED_STOCK_COLS_ORIG]
     missing_stock_cols = [req for req in normalized_required_stock_cols if req not in stock_df.columns]
     if missing_stock_cols:
-        st.error(f"Stock-filen mangler følgende kolonner (efter normalisering): {missing_stock_cols}. Fundne kolonner: {stock_df.columns.tolist()}")
+        st.error(f"Stock-filen mangler kolonner: {missing_stock_cols}.")
         return
-    st.write("Stock-fil indlæst succesfuldt!")
+    status.text("Stock-fil indlæst!")
     progress_bar.progress(50)
     
-    st.write("Indlæser PowerPoint-template...")
+    status.text("Indlæser PowerPoint-template...")
     try:
         prs = Presentation(TEMPLATE_FILE_PATH)
     except Exception as e:
@@ -354,7 +327,7 @@ def main():
     if len(prs.slides) < 1:
         st.error("Template-filen skal indeholde mindst én slide.")
         return
-    st.write("Template-fil indlæst succesfuldt!")
+    status.text("Template-fil indlæst!")
     progress_bar.progress(70)
     
     template_slide = prs.slides[0]
@@ -364,24 +337,28 @@ def main():
     total_products = len(user_df)
     batch_size = 10
     num_batches = math.ceil(total_products / batch_size)
-    st.write(f"Behandler {total_products} varer i {num_batches} batch(es)...")
+    status.text(f"Behandler {total_products} varer i {num_batches} batch(es)...")
     
     for batch_index in range(num_batches):
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
-        for index, product in batch_df.iterrows():
+        status.text(f"Behandler batch {batch_index + 1} af {num_batches}...")
+        for idx, product in batch_df.iterrows():
+            global_index = batch_index * batch_size + idx + 1
+            status.text(f"Behandler vare {global_index} af {total_products}...")
             item_no = product["Item no"]
             slide = duplicate_slide(prs, template_slide)
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
+                # Hvis ingen mapping, opret slide med kun Product code feltet udfyldt med varenummeret
                 placeholder_texts = {}
                 for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
                     if ph == "{{Product code}}":
                         placeholder_texts[ph] = f"{label} {item_no}"
                     else:
-                        placeholder_texts[ph] = f"{label}"
-                placeholder_texts["{{Product RTS}}"] = "Product in stock versions:\n\nNo mapping found"
-                placeholder_texts["{{Product MTO}}"] = "Avilable for made to order:\n\nNo mapping found"
+                        placeholder_texts[ph] = ""
+                placeholder_texts["{{Product RTS}}"] = "Product in stock versions:\n\n"
+                placeholder_texts["{{Product MTO}}"] = "Avilable for made to order:\n\n"
                 replace_text_placeholders(slide, placeholder_texts)
                 replace_hyperlink_placeholders(slide, {})
             else:
@@ -389,16 +366,16 @@ def main():
                 for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
                     norm_ph = normalize_col(ph)
                     value = mapping_row.get(norm_ph, "")
-                    if pd.isna(value):
-                        value = ""
-                    if ph in ("{{Product code}}", "{{Product name}}", "{{Product country of origin}}"):
-                        placeholder_texts[ph] = f"{label} {value}"
-                    elif ph in ("{{CertificateName}}", "{{Product Consumption COM}}"):
-                        placeholder_texts[ph] = f"{label}\n\n{value}"
+                    if pd.isna(value) or not str(value).strip():
+                        placeholder_texts[ph] = ""
                     else:
-                        placeholder_texts[ph] = f"{label}\n{value}"
+                        if ph in ("{{Product code}}", "{{Product name}}", "{{Product country of origin}}"):
+                            placeholder_texts[ph] = f"{label} {value}"
+                        elif ph in ("{{CertificateName}}", "{{Product Consumption COM}}"):
+                            placeholder_texts[ph] = f"{label}\n\n{value}"
+                        else:
+                            placeholder_texts[ph] = f"{label}\n{value}"
                 
-                product_code = mapping_row.get(MAPPING_PRODUCT_CODE_KEY, "")
                 rts_text = process_stock_rts_alternative(mapping_row, stock_df)
                 mto_text = process_stock_mto_alternative(mapping_row, stock_df)
                 placeholder_texts["{{Product RTS}}"] = f"Product in stock versions:\n\n{rts_text}"
@@ -410,7 +387,7 @@ def main():
                 for ph, display_text in HYPERLINK_PLACEHOLDERS_ORIG.items():
                     norm_ph = normalize_col(ph)
                     url = mapping_row.get(norm_ph, "")
-                    if pd.isna(url):
+                    if pd.isna(url) or not str(url).strip():
                         url = ""
                     hyperlink_vals[ph] = (display_text, url)
                 replace_hyperlink_placeholders(slide, hyperlink_vals)
@@ -419,14 +396,14 @@ def main():
                 for ph in IMAGE_PLACEHOLDERS_ORIG:
                     norm_ph = normalize_col(ph)
                     url = mapping_row.get(norm_ph, "")
-                    if pd.isna(url):
+                    if pd.isna(url) or not str(url).strip():
                         url = ""
                     image_vals[ph] = url
                 replace_image_placeholders_parallel(slide, image_vals)
         current_progress = 70 + int((batch_index + 1) / num_batches * 30)
         progress_bar.progress(current_progress)
-        st.write(f"Batch {batch_index + 1} af {num_batches} behandlet.")
     
+    status.text("Generering fuldført!")
     ppt_io = io.BytesIO()
     try:
         prs.save(ppt_io)
@@ -435,7 +412,7 @@ def main():
         st.error(f"Fejl ved gemning af PowerPoint: {e}")
         return
 
-    st.success("PowerPoint genereret succesfuldt!")
+    status.text("PowerPoint genereret succesfuldt!")
     st.download_button("Download PowerPoint", ppt_io,
                        file_name="generated_presentation.pptx",
                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
@@ -449,3 +426,4 @@ if __name__ == '__main__':
     if 'generated_ppt' not in st.session_state:
         st.session_state.generated_ppt = None
     main()
+
