@@ -217,7 +217,6 @@ def replace_image_placeholders_parallel(slide, image_values):
         url = image_values.get(ph, "")
         if url:
             tasks.append((ph, url))
-    
     results = {}
     with ThreadPoolExecutor(max_workers=5) as executor:
         future_to_ph = {executor.submit(fetch_and_process_image_cached, url): ph for ph, url in tasks}
@@ -228,7 +227,6 @@ def replace_image_placeholders_parallel(slide, image_values):
             except Exception as exc:
                 st.warning(f"Fejl ved parallel billedhentning for {ph}: {exc}")
                 results[ph] = None
-
     for shape in slide.shapes:
         if shape.has_text_frame:
             tekst = shape.text
@@ -312,7 +310,6 @@ def main():
         return
 
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
-
     st.write("Brugerdata oprettet succesfuldt!")
     st.info("Indlæser og validerer filer...")
     progress_bar = st.progress(10)
@@ -324,7 +321,6 @@ def main():
     except Exception as e:
         st.error(f"Fejl ved læsning af mapping-fil: {e}")
         return
-
     normalized_required_mapping_cols = [normalize_col(col) for col in REQUIRED_MAPPING_COLS_ORIG]
     missing_mapping_cols = [req for req in normalized_required_mapping_cols if req not in mapping_df.columns]
     if missing_mapping_cols:
@@ -333,7 +329,7 @@ def main():
     st.write("Mapping-fil indlæst succesfuldt!")
     progress_bar.progress(30)
     MAPPING_PRODUCT_CODE_KEY = normalize_col("{{Product code}}")
-
+    
     st.write("Indlæser stock-fil...")
     try:
         stock_df = pd.read_excel(STOCK_FILE_PATH)
@@ -341,7 +337,6 @@ def main():
     except Exception as e:
         st.error(f"Fejl ved læsning af stock-fil: {e}")
         return
-
     normalized_required_stock_cols = [normalize_col(col) for col in REQUIRED_STOCK_COLS_ORIG]
     missing_stock_cols = [req for req in normalized_required_stock_cols if req not in stock_df.columns]
     if missing_stock_cols:
@@ -349,39 +344,36 @@ def main():
         return
     st.write("Stock-fil indlæst succesfuldt!")
     progress_bar.progress(50)
-
+    
     st.write("Indlæser PowerPoint-template...")
     try:
         prs = Presentation(TEMPLATE_FILE_PATH)
     except Exception as e:
         st.error(f"Fejl ved læsning af template-fil: {e}")
         return
-
     if len(prs.slides) < 1:
         st.error("Template-filen skal indeholde mindst én slide.")
         return
-
     st.write("Template-fil indlæst succesfuldt!")
     progress_bar.progress(70)
-
+    
     template_slide = prs.slides[0]
     prs.slides._sldIdLst.remove(prs.slides._sldIdLst[0])
-
+    
     missing_items = []
     total_products = len(user_df)
     batch_size = 10
     num_batches = math.ceil(total_products / batch_size)
     st.write(f"Behandler {total_products} varer i {num_batches} batch(es)...")
+    
     for batch_index in range(num_batches):
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for index, product in batch_df.iterrows():
             item_no = product["Item no"]
             slide = duplicate_slide(prs, template_slide)
-            
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
-                # Opret slide med kun Product code udfyldt med varenummer
                 placeholder_texts = {}
                 for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
                     if ph == "{{Product code}}":
