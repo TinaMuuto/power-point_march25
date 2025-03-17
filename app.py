@@ -40,10 +40,10 @@ REQUIRED_MAPPING_COLS_ORIG = [
 
 # --- Forventede kolonner i stock-fil ---
 REQUIRED_STOCK_COLS_ORIG = [
-    "productkey",
-    "variantname",
-    "rts",
-    "mto"
+    "productkey",    # Kolonne B: ProductKey
+    "variantname",   # Kolonne D: VariantName
+    "rts",           # Kolonne H: RTS
+    "mto"            # Kolonne I: MTO
 ]
 
 # --- Placeholders til erstatning i templaten ---
@@ -74,28 +74,37 @@ IMAGE_PLACEHOLDERS_ORIG = [
     "{{Product Lifestyle4}}",
 ]
 
-def group_variant_names(variant_names, group_item_sep=", ", group_sep="\n"):
+# --- Avanceret gruppering af VariantName ---
+def group_by_color_and_size(variant_names):
+    """
+    Grupperer variantnavne efter farve og samler unikke størrelser.
+    For hver variant forventes formatet "Farve - [noget] - Størrelse".
+    Funktionen bruger den første del som farve og den sidste som størrelse.
+    Outputtet bliver i formatet:
+      Farve: Størrelse 1, Størrelse 2, ...
+    Hvis der ikke findes en " - " separator, returneres navnet uændret.
+    """
     groups = {}
     for name in variant_names:
         if " - " in name:
-            prefix, suffix = name.split(" - ", 1)
+            parts = name.split(" - ")
+            color = parts[0].strip()
+            size = parts[-1].strip()  # Brug den sidste del som størrelse
         else:
-            prefix, suffix = name, ""
-        prefix = prefix.strip()
-        suffix = suffix.strip()
-        groups.setdefault(prefix, set())
-        if suffix:
-            groups[prefix].add(suffix)
+            color = name.strip()
+            size = ""
+        groups.setdefault(color, set())
+        if size:
+            groups[color].add(size)
     output_lines = []
-    for prefix, suffixes in groups.items():
-        suffix_list = sorted(suffixes)
-        if suffix_list:
-            line = f"{prefix} - " + group_item_sep.join(suffix_list)
+    for color, sizes in groups.items():
+        if sizes:
+            output_lines.append(f"{color}: {', '.join(sorted(sizes))}")
         else:
-            line = prefix
-        output_lines.append(line)
-    return group_sep.join(sorted(output_lines))
+            output_lines.append(color)
+    return "\n".join(sorted(output_lines))
 
+# --- Almindelige hjælpefunktioner ---
 def normalize_text(s):
     return re.sub(r"\s+", "", str(s).replace("\u00A0", " ")).lower()
 
@@ -137,7 +146,8 @@ def process_stock_rts_alternative(mapping_row, stock_df):
         st.error(f"KeyError i RTS variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
-    return group_variant_names(unique_variant_names, group_item_sep=", ", group_sep="\n")
+    # Brug den avancerede gruppering for at vise "Farve: Størrelse, Størrelse, ..."
+    return group_by_color_and_size(unique_variant_names)
 
 def process_stock_mto_alternative(mapping_row, stock_df):
     product_key = mapping_row.get("productkey", "")
@@ -160,7 +170,7 @@ def process_stock_mto_alternative(mapping_row, stock_df):
         st.error(f"KeyError i MTO variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
-    return group_variant_names(unique_variant_names, group_item_sep=", ", group_sep=", ")
+    return group_by_color_and_size(unique_variant_names)
 
 @st.cache_data(show_spinner=False)
 def fetch_and_process_image_cached(url, quality=70, max_size=(1200, 1200)):
@@ -260,6 +270,7 @@ def duplicate_slide(prs, slide):
         new_slide.shapes._spTree.append(deepcopy(shape._element))
     return new_slide
 
+# --- Main Streamlit App ---
 def main():
     st.title("PowerPoint Generator App")
     st.write("Indsæt varenumre (Item no) – ét pr. linje:")
@@ -277,7 +288,7 @@ def main():
 
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
     
-    # Opret progress bar og en statusfelt nedenunder
+    # Opret progress bar og et statusfelt placeret under progress baren
     progress_bar = st.progress(0)
     status = st.empty()
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Filer uploadet og brugerdata oprettet.</div>", unsafe_allow_html=True)
@@ -326,7 +337,7 @@ def main():
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Template-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(70)
     
-    # Lav en kopi af templatesliden og fjern den originale
+    # Lav en kopi af templatesliden, og fjern den originale
     template_slide = prs.slides[0]
     template_copy = deepcopy(template_slide)
     prs.slides._sldIdLst.remove(prs.slides._sldIdLst[0])
@@ -342,7 +353,6 @@ def main():
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for idx, product in batch_df.iterrows():
             item_no = product["Item no"]
-            # Brug kopien af templatesliden
             slide = duplicate_slide(prs, template_copy)
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
@@ -396,8 +406,8 @@ def main():
                         url = ""
                     image_vals[ph] = url
                 replace_image_placeholders_parallel(slide, image_vals)
-        progress = 70 + int((batch_index + 1) / num_batches * 30)
-        progress_bar.progress(progress)
+        current_progress = 70 + int((batch_index + 1) / num_batches * 30)
+        progress_bar.progress(current_progress)
     
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Generering fuldført!</div>", unsafe_allow_html=True)
     ppt_io = io.BytesIO()
@@ -415,7 +425,7 @@ def main():
                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
     
     if missing_items:
-        st.text_area("Varenumre uden match:", value="\n".join(missing_items), height=100)
+        st.text_area("Manglende varenumre (kopier her):", value="\n".join(missing_items), height=100)
     
     st.session_state.generated_ppt = ppt_io
 
@@ -423,4 +433,3 @@ if __name__ == '__main__':
     if 'generated_ppt' not in st.session_state:
         st.session_state.generated_ppt = None
     main()
-
