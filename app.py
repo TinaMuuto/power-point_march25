@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from pptx import Presentation
-from pptx.util import Inches, Pt
 import io
 import re
 import requests
@@ -15,7 +14,7 @@ MAPPING_FILE_PATH = "mapping-file.xlsx"
 STOCK_FILE_PATH = "stock.xlsx"
 TEMPLATE_FILE_PATH = "template-generator.pptx"
 
-# --- Forventede kolonner i mapping-fil ---
+# --- Forventede kolonner ---
 REQUIRED_MAPPING_COLS_ORIG = [
     "{{Product name}}",
     "{{Product code}}",
@@ -35,18 +34,16 @@ REQUIRED_MAPPING_COLS_ORIG = [
     "{{Product Lifestyle2}}",
     "{{Product Lifestyle3}}",
     "{{Product Lifestyle4}}",
-    "ProductKey"  # Mapping-filens ProductKey (uden klammer)
+    "ProductKey"
 ]
 
-# --- Forventede kolonner i stock-fil ---
 REQUIRED_STOCK_COLS_ORIG = [
-    "productkey",    # Kolonne B: ProductKey
-    "variantname",   # Kolonne D: VariantName
-    "rts",           # Kolonne H: RTS
-    "mto"            # Kolonne I: MTO
+    "productkey",
+    "variantname",
+    "rts",
+    "mto"
 ]
 
-# --- Placeholders til erstatning i templaten ---
 TEXT_PLACEHOLDERS_ORIG = {
     "{{Product name}}": "Product Name:",
     "{{Product code}}": "Product Code:",
@@ -74,7 +71,6 @@ IMAGE_PLACEHOLDERS_ORIG = [
     "{{Product Lifestyle4}}",
 ]
 
-# --- Funktion til gruppering af variantnavne ---
 def group_variant_names(variant_names, group_item_sep=", ", group_sep="\n"):
     groups = {}
     for name in variant_names:
@@ -97,7 +93,6 @@ def group_variant_names(variant_names, group_item_sep=", ", group_sep="\n"):
         output_lines.append(line)
     return group_sep.join(sorted(output_lines))
 
-# --- Hjælpefunktioner ---
 def normalize_text(s):
     return re.sub(r"\s+", "", str(s).replace("\u00A0", " ")).lower()
 
@@ -126,7 +121,7 @@ def process_stock_rts_alternative(mapping_row, stock_df):
     try:
         filtered = stock_df[stock_df["productkey"].apply(lambda x: normalize_text(x) == norm_product_key)]
     except KeyError as e:
-        st.error(f"KeyError i RTS (productkey): {e}")
+        st.error(f"KeyError i RTS: {e}")
         return ""
     if filtered.empty:
         return ""
@@ -136,7 +131,7 @@ def process_stock_rts_alternative(mapping_row, stock_df):
     try:
         variant_names = filtered["variantname"].dropna().astype(str).tolist()
     except KeyError as e:
-        st.error(f"KeyError i RTS (variantname): {e}")
+        st.error(f"KeyError i RTS variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
     return group_variant_names(unique_variant_names, group_item_sep=", ", group_sep="\n")
@@ -149,7 +144,7 @@ def process_stock_mto_alternative(mapping_row, stock_df):
     try:
         filtered = stock_df[stock_df["productkey"].apply(lambda x: normalize_text(x) == norm_product_key)]
     except KeyError as e:
-        st.error(f"KeyError i MTO (productkey): {e}")
+        st.error(f"KeyError i MTO: {e}")
         return ""
     if filtered.empty:
         return ""
@@ -159,7 +154,7 @@ def process_stock_mto_alternative(mapping_row, stock_df):
     try:
         variant_names = filtered["variantname"].dropna().astype(str).tolist()
     except KeyError as e:
-        st.error(f"KeyError i MTO (variantname): {e}")
+        st.error(f"KeyError i MTO variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
     return group_variant_names(unique_variant_names, group_item_sep=", ", group_sep=", ")
@@ -255,9 +250,6 @@ def replace_text_placeholders(slide, placeholder_values):
                     first_run.text = new_text
 
 def duplicate_slide(prs, slide):
-    """
-    Duplicerer en slide ved at kopiere dens elementer.
-    """
     slide_layout = slide.slide_layout
     new_slide = prs.slides.add_slide(slide_layout)
     new_slide.shapes._spTree.clear()
@@ -265,39 +257,32 @@ def duplicate_slide(prs, slide):
         new_slide.shapes._spTree.append(deepcopy(shape._element))
     return new_slide
 
-# --- En simpel funktion til at opdatere progress-loggen ---
-def update_progress_log(new_message):
-    if "progress_log" not in st.session_state:
-        st.session_state.progress_log = []
-    st.session_state.progress_log.append(new_message)
-    # Behold kun de seneste 5 beskeder
-    st.session_state.progress_log = st.session_state.progress_log[-5:]
-    # Vis beskederne i en tekstboks med grå stil
-    st.markdown(f"<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>{'<br>'.join(st.session_state.progress_log)}</div>", unsafe_allow_html=True)
-
 # --- Main Streamlit App ---
 def main():
-    # Opret en status-placeholder til progress-loggen
-    st.session_state.progress_log = []  # nulstil loggen
+    # Opret en simpel status-placeholder til de overordnede beskeder
+    status = st.empty()
+    
+    status.text("Status: Starter appen...")
     st.title("PowerPoint Generator App")
     st.write("Indsæt varenumre (Item no) – ét pr. linje:")
     st.info("Bemærk: Indsæt varenumre uden ekstra mellemrum omkring bindestreger, f.eks. '03084' eller '12345-AB'.")
     
     pasted_text = st.text_area("Indsæt varenumre her", height=200)
     if not pasted_text.strip():
-        update_progress_log("Vent: Indsæt varenumre i tekstfeltet.")
+        status.text("Status: Vent – indsæt varenumre i tekstfeltet.")
         return
 
     varenumre = [line.strip() for line in pasted_text.splitlines() if line.strip()]
     if not varenumre:
-        update_progress_log("Ingen gyldige varenumre fundet.")
+        status.text("Status: Ingen gyldige varenumre fundet.")
         return
 
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
-    update_progress_log("Brugerdata oprettet!")
+    status.text("Status: Filer uploadet og brugerdata oprettet.")
     
-    update_progress_log("Indlæser mapping-fil...")
     progress_bar = st.progress(10)
+    
+    status.text("Status: Indlæser mapping-fil...")
     try:
         mapping_df = pd.read_excel(MAPPING_FILE_PATH)
         mapping_df.columns = [normalize_col(col) for col in mapping_df.columns]
@@ -309,11 +294,11 @@ def main():
     if missing_mapping_cols:
         st.error(f"Mapping-filen mangler kolonner: {missing_mapping_cols}.")
         return
-    update_progress_log("Mapping-fil indlæst!")
+    status.text("Status: Mapping-fil indlæst.")
     progress_bar.progress(30)
     MAPPING_PRODUCT_CODE_KEY = normalize_col("{{Product code}}")
     
-    update_progress_log("Indlæser stock-fil...")
+    status.text("Status: Indlæser stock-fil...")
     try:
         stock_df = pd.read_excel(STOCK_FILE_PATH)
         stock_df.columns = [normalize_col(col) for col in stock_df.columns]
@@ -325,10 +310,10 @@ def main():
     if missing_stock_cols:
         st.error(f"Stock-filen mangler kolonner: {missing_stock_cols}.")
         return
-    update_progress_log("Stock-fil indlæst!")
+    status.text("Status: Stock-fil indlæst.")
     progress_bar.progress(50)
     
-    update_progress_log("Indlæser PowerPoint-template...")
+    status.text("Status: Indlæser PowerPoint-template...")
     try:
         prs = Presentation(TEMPLATE_FILE_PATH)
     except Exception as e:
@@ -337,29 +322,28 @@ def main():
     if len(prs.slides) < 1:
         st.error("Template-filen skal indeholde mindst én slide.")
         return
-    update_progress_log("Template-fil indlæst!")
+    status.text("Status: Template-fil indlæst.")
     progress_bar.progress(70)
     
     template_slide = prs.slides[0]
     prs.slides._sldIdLst.remove(prs.slides._sldIdLst[0])
     
-    missing_items = []
     total_products = len(user_df)
     batch_size = 10
     num_batches = math.ceil(total_products / batch_size)
-    update_progress_log(f"Behandler {total_products} varer i {num_batches} batch(es)...")
+    status.text(f"Status: {total_products} varer opdelt i {num_batches} batch(es).")
     
+    missing_items = []
     for batch_index in range(num_batches):
+        status.text(f"Status: Behandler batch {batch_index + 1} af {num_batches}...")
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
-        update_progress_log(f"Behandler batch {batch_index + 1} af {num_batches}...")
         for idx, product in batch_df.iterrows():
-            global_index = batch_index * batch_size + idx + 1
-            update_progress_log(f"Behandler vare {global_index} af {total_products}...")
             item_no = product["Item no"]
             slide = duplicate_slide(prs, template_slide)
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
+                # Opret slide med kun Product code udfyldt med varenummeret
                 placeholder_texts = {}
                 for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
                     if ph == "{{Product code}}":
@@ -409,11 +393,10 @@ def main():
                         url = ""
                     image_vals[ph] = url
                 replace_image_placeholders_parallel(slide, image_vals)
-        current_progress = 70 + int((batch_index + 1) / num_batches * 30)
-        progress_bar.progress(current_progress)
-        update_progress_log(f"Batch {batch_index + 1} af {num_batches} behandlet.")
+        progress = 70 + int((batch_index + 1) / num_batches * 30)
+        progress_bar.progress(progress)
     
-    update_progress_log("Generering fuldført!")
+    status.text("Status: Generering fuldført!")
     ppt_io = io.BytesIO()
     try:
         prs.save(ppt_io)
@@ -422,7 +405,7 @@ def main():
         st.error(f"Fejl ved gemning af PowerPoint: {e}")
         return
 
-    update_progress_log("PowerPoint genereret succesfuldt!")
+    status.text("Status: PowerPoint genereret succesfuldt!")
     st.success("PowerPoint genereret succesfuldt!")
     st.download_button("Download PowerPoint", ppt_io,
                        file_name="generated_presentation.pptx",
