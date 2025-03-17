@@ -284,7 +284,6 @@ def replace_text_placeholders(slide, placeholder_values):
                         paragraph.runs[i].text = ""
                     first_run.text = new_text
 
-# Duplicate_slide skal være defineret før den kaldes
 def duplicate_slide(prs, slide):
     """
     Duplicerer en slide ved at kopiere dens elementer.
@@ -315,10 +314,10 @@ def main():
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
 
     st.write("Brugerdata oprettet succesfuldt!")
-    st.info("Validerer filer...")
+    st.info("Indlæser og validerer filer...")
     progress_bar = st.progress(10)
-
-    # Indlæs mapping-fil
+    
+    st.write("Indlæser mapping-fil...")
     try:
         mapping_df = pd.read_excel(MAPPING_FILE_PATH)
         mapping_df.columns = [normalize_col(col) for col in mapping_df.columns]
@@ -331,12 +330,11 @@ def main():
     if missing_mapping_cols:
         st.error(f"Mapping-filen mangler følgende kolonner (efter normalisering): {missing_mapping_cols}. Fundne kolonner: {mapping_df.columns.tolist()}")
         return
-
     st.write("Mapping-fil indlæst succesfuldt!")
     progress_bar.progress(30)
     MAPPING_PRODUCT_CODE_KEY = normalize_col("{{Product code}}")
 
-    # Indlæs stock-fil
+    st.write("Indlæser stock-fil...")
     try:
         stock_df = pd.read_excel(STOCK_FILE_PATH)
         stock_df.columns = [normalize_col(col) for col in stock_df.columns]
@@ -349,11 +347,10 @@ def main():
     if missing_stock_cols:
         st.error(f"Stock-filen mangler følgende kolonner (efter normalisering): {missing_stock_cols}. Fundne kolonner: {stock_df.columns.tolist()}")
         return
-
     st.write("Stock-fil indlæst succesfuldt!")
     progress_bar.progress(50)
 
-    # Indlæs PowerPoint-template
+    st.write("Indlæser PowerPoint-template...")
     try:
         prs = Presentation(TEMPLATE_FILE_PATH)
     except Exception as e:
@@ -374,16 +371,17 @@ def main():
     total_products = len(user_df)
     batch_size = 10
     num_batches = math.ceil(total_products / batch_size)
+    st.write(f"Behandler {total_products} varer i {num_batches} batch(es)...")
     for batch_index in range(num_batches):
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for index, product in batch_df.iterrows():
             item_no = product["Item no"]
             slide = duplicate_slide(prs, template_slide)
-
+            
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
-                # Opret en slide med kun Product code feltet udfyldt med varenummeret
+                # Opret slide med kun Product code udfyldt med varenummer
                 placeholder_texts = {}
                 for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
                     if ph == "{{Product code}}":
@@ -435,6 +433,7 @@ def main():
                 replace_image_placeholders_parallel(slide, image_vals)
         current_progress = 70 + int((batch_index + 1) / num_batches * 30)
         progress_bar.progress(current_progress)
+        st.write(f"Batch {batch_index + 1} af {num_batches} behandlet.")
     
     ppt_io = io.BytesIO()
     try:
