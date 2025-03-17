@@ -1,12 +1,14 @@
 import streamlit as st
 import pandas as pd
 from pptx import Presentation
+from pptx.util import Inches, Pt
 import io
 import re
 import requests
 from PIL import Image
 from copy import deepcopy
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Filstier – tilpas efter behov
 MAPPING_FILE_PATH = "mapping-file.xlsx"
@@ -130,10 +132,10 @@ def process_stock_rts_alternative(mapping_row, stock_df):
     """
     Logik for {{Product RTS}}:
       1. Hent 'ProductKey' fra mapping_row.
-      2. Filtrer stock_df, så kun rækker med en matchende 'productkey' (efter normalisering) er med.
+      2. Filtrer stock_df, så kun rækker med en matchende 'productkey' (normaliseret) er med.
       3. Filtrer herefter, så kun rækker med en ikke-tom 'rts' er med.
       4. Udtræk unikke værdier fra kolonnen 'variantname'.
-      5. Gruppér disse med group_variant_names() med linjeskift som separator.
+      5. Gruppér disse med group_variant_names() med linjeskift som gruppe-separator.
       6. Returnér resultatet.
     """
     product_key = mapping_row.get("productkey", "")
@@ -208,9 +210,6 @@ def fetch_and_process_image_cached(url, quality=70, max_size=(1200, 1200)):
     return None
 
 def replace_image_placeholders_parallel(slide, image_values):
-    """
-    Erstatter billedplaceholders i en slide ved at hente billeder parallelt.
-    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     tasks = []
     for ph in IMAGE_PLACEHOLDERS_ORIG:
@@ -284,6 +283,18 @@ def replace_text_placeholders(slide, placeholder_values):
                     for i in range(len(paragraph.runs)-1, -1, -1):
                         paragraph.runs[i].text = ""
                     first_run.text = new_text
+
+# Duplicate_slide skal være defineret før den kaldes
+def duplicate_slide(prs, slide):
+    """
+    Duplicerer en slide ved at kopiere dens elementer.
+    """
+    slide_layout = slide.slide_layout
+    new_slide = prs.slides.add_slide(slide_layout)
+    new_slide.shapes._spTree.clear()
+    for shape in slide.shapes:
+        new_slide.shapes._spTree.append(deepcopy(shape._element))
+    return new_slide
 
 # --- Main Streamlit App ---
 def main():
@@ -359,10 +370,8 @@ def main():
     template_slide = prs.slides[0]
     prs.slides._sldIdLst.remove(prs.slides._sldIdLst[0])
 
-    missing_items = []  # Liste over varenummer, der ikke findes i mapping
+    missing_items = []
     total_products = len(user_df)
-    
-    # Batch-proces (10 pr. batch)
     batch_size = 10
     num_batches = math.ceil(total_products / batch_size)
     for batch_index in range(num_batches):
@@ -370,7 +379,7 @@ def main():
         for index, product in batch_df.iterrows():
             item_no = product["Item no"]
             slide = duplicate_slide(prs, template_slide)
-            
+
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
@@ -381,12 +390,10 @@ def main():
                         placeholder_texts[ph] = f"{label} {item_no}"
                     else:
                         placeholder_texts[ph] = f"{label}"
-                # For RTS og MTO indsættes en meddelelse
                 placeholder_texts["{{Product RTS}}"] = "Product in stock versions:\n\nNo mapping found"
                 placeholder_texts["{{Product MTO}}"] = "Avilable for made to order:\n\nNo mapping found"
                 replace_text_placeholders(slide, placeholder_texts)
                 replace_hyperlink_placeholders(slide, {})
-                # Vi beholder sliden
             else:
                 placeholder_texts = {}
                 for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
