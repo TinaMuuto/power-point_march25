@@ -35,7 +35,7 @@ REQUIRED_MAPPING_COLS_ORIG = [
     "{{Product Lifestyle2}}",
     "{{Product Lifestyle3}}",
     "{{Product Lifestyle4}}",
-    "ProductKey"
+    "ProductKey"  # Mapping-filens ProductKey (uden klammer)
 ]
 
 # --- Forventede kolonner i stock-fil ---
@@ -260,7 +260,6 @@ def duplicate_slide(prs, slide):
         new_slide.shapes._spTree.append(deepcopy(shape._element))
     return new_slide
 
-# --- Main Streamlit App ---
 def main():
     st.title("PowerPoint Generator App")
     st.write("Indsæt varenumre (Item no) – ét pr. linje:")
@@ -278,10 +277,9 @@ def main():
 
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
     
-    # Progress bar vises øverst, og statusfeltet vises under den
+    # Opret progress bar og en statusfelt nedenunder
     progress_bar = st.progress(0)
-    status = st.empty()  # Statusfeltet, der viser den aktuelle overordnede status
-
+    status = st.empty()
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Filer uploadet og brugerdata oprettet.</div>", unsafe_allow_html=True)
     progress_bar.progress(10)
     
@@ -328,7 +326,9 @@ def main():
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Template-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(70)
     
+    # Lav en kopi af templatesliden og fjern den originale
     template_slide = prs.slides[0]
+    template_copy = deepcopy(template_slide)
     prs.slides._sldIdLst.remove(prs.slides._sldIdLst[0])
     
     total_products = len(user_df)
@@ -342,7 +342,8 @@ def main():
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for idx, product in batch_df.iterrows():
             item_no = product["Item no"]
-            slide = duplicate_slide(prs, template_slide)
+            # Brug kopien af templatesliden
+            slide = duplicate_slide(prs, template_copy)
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
@@ -395,8 +396,8 @@ def main():
                         url = ""
                     image_vals[ph] = url
                 replace_image_placeholders_parallel(slide, image_vals)
-        current_progress = 70 + int((batch_index + 1) / num_batches * 30)
-        progress_bar.progress(current_progress)
+        progress = 70 + int((batch_index + 1) / num_batches * 30)
+        progress_bar.progress(progress)
     
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Generering fuldført!</div>", unsafe_allow_html=True)
     ppt_io = io.BytesIO()
@@ -422,3 +423,4 @@ if __name__ == '__main__':
     if 'generated_ppt' not in st.session_state:
         st.session_state.generated_ppt = None
     main()
+
