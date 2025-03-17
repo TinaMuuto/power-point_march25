@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from pptx import Presentation
+from pptx.util import Inches, Pt
 import io
 import re
 import requests
@@ -14,7 +15,7 @@ MAPPING_FILE_PATH = "mapping-file.xlsx"
 STOCK_FILE_PATH = "stock.xlsx"
 TEMPLATE_FILE_PATH = "template-generator.pptx"
 
-# --- Forventede kolonner ---
+# --- Forventede kolonner i mapping-fil ---
 REQUIRED_MAPPING_COLS_ORIG = [
     "{{Product name}}",
     "{{Product code}}",
@@ -37,6 +38,7 @@ REQUIRED_MAPPING_COLS_ORIG = [
     "ProductKey"
 ]
 
+# --- Forventede kolonner i stock-fil ---
 REQUIRED_STOCK_COLS_ORIG = [
     "productkey",
     "variantname",
@@ -44,6 +46,7 @@ REQUIRED_STOCK_COLS_ORIG = [
     "mto"
 ]
 
+# --- Placeholders til erstatning i templaten ---
 TEXT_PLACEHOLDERS_ORIG = {
     "{{Product name}}": "Product Name:",
     "{{Product code}}": "Product Code:",
@@ -259,30 +262,30 @@ def duplicate_slide(prs, slide):
 
 # --- Main Streamlit App ---
 def main():
-    # Opret en simpel status-placeholder til de overordnede beskeder
-    status = st.empty()
-    
-    status.text("Status: Starter appen...")
     st.title("PowerPoint Generator App")
     st.write("Indsæt varenumre (Item no) – ét pr. linje:")
     st.info("Bemærk: Indsæt varenumre uden ekstra mellemrum omkring bindestreger, f.eks. '03084' eller '12345-AB'.")
     
     pasted_text = st.text_area("Indsæt varenumre her", height=200)
     if not pasted_text.strip():
-        status.text("Status: Vent – indsæt varenumre i tekstfeltet.")
+        st.error("Indsæt venligst varenumre i tekstfeltet.")
         return
 
     varenumre = [line.strip() for line in pasted_text.splitlines() if line.strip()]
     if not varenumre:
-        status.text("Status: Ingen gyldige varenumre fundet.")
+        st.error("Ingen gyldige varenumre fundet.")
         return
 
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
-    status.text("Status: Filer uploadet og brugerdata oprettet.")
     
-    progress_bar = st.progress(10)
+    # Progress bar vises øverst, og statusfeltet vises under den
+    progress_bar = st.progress(0)
+    status = st.empty()  # Statusfeltet, der viser den aktuelle overordnede status
+
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Filer uploadet og brugerdata oprettet.</div>", unsafe_allow_html=True)
+    progress_bar.progress(10)
     
-    status.text("Status: Indlæser mapping-fil...")
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Indlæser mapping-fil...</div>", unsafe_allow_html=True)
     try:
         mapping_df = pd.read_excel(MAPPING_FILE_PATH)
         mapping_df.columns = [normalize_col(col) for col in mapping_df.columns]
@@ -294,11 +297,11 @@ def main():
     if missing_mapping_cols:
         st.error(f"Mapping-filen mangler kolonner: {missing_mapping_cols}.")
         return
-    status.text("Status: Mapping-fil indlæst.")
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Mapping-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(30)
     MAPPING_PRODUCT_CODE_KEY = normalize_col("{{Product code}}")
     
-    status.text("Status: Indlæser stock-fil...")
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Indlæser stock-fil...</div>", unsafe_allow_html=True)
     try:
         stock_df = pd.read_excel(STOCK_FILE_PATH)
         stock_df.columns = [normalize_col(col) for col in stock_df.columns]
@@ -310,10 +313,10 @@ def main():
     if missing_stock_cols:
         st.error(f"Stock-filen mangler kolonner: {missing_stock_cols}.")
         return
-    status.text("Status: Stock-fil indlæst.")
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Stock-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(50)
     
-    status.text("Status: Indlæser PowerPoint-template...")
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Indlæser PowerPoint-template...</div>", unsafe_allow_html=True)
     try:
         prs = Presentation(TEMPLATE_FILE_PATH)
     except Exception as e:
@@ -322,7 +325,7 @@ def main():
     if len(prs.slides) < 1:
         st.error("Template-filen skal indeholde mindst én slide.")
         return
-    status.text("Status: Template-fil indlæst.")
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Template-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(70)
     
     template_slide = prs.slides[0]
@@ -331,11 +334,11 @@ def main():
     total_products = len(user_df)
     batch_size = 10
     num_batches = math.ceil(total_products / batch_size)
-    status.text(f"Status: {total_products} varer opdelt i {num_batches} batch(es).")
+    status.markdown(f"<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: {total_products} varer opdelt i {num_batches} batch(es).</div>", unsafe_allow_html=True)
     
     missing_items = []
     for batch_index in range(num_batches):
-        status.text(f"Status: Behandler batch {batch_index + 1} af {num_batches}...")
+        status.markdown(f"<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Behandler batch {batch_index + 1} af {num_batches}...</div>", unsafe_allow_html=True)
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for idx, product in batch_df.iterrows():
             item_no = product["Item no"]
@@ -343,7 +346,6 @@ def main():
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
-                # Opret slide med kun Product code udfyldt med varenummeret
                 placeholder_texts = {}
                 for ph, label in TEXT_PLACEHOLDERS_ORIG.items():
                     if ph == "{{Product code}}":
@@ -393,10 +395,10 @@ def main():
                         url = ""
                     image_vals[ph] = url
                 replace_image_placeholders_parallel(slide, image_vals)
-        progress = 70 + int((batch_index + 1) / num_batches * 30)
-        progress_bar.progress(progress)
+        current_progress = 70 + int((batch_index + 1) / num_batches * 30)
+        progress_bar.progress(current_progress)
     
-    status.text("Status: Generering fuldført!")
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Generering fuldført!</div>", unsafe_allow_html=True)
     ppt_io = io.BytesIO()
     try:
         prs.save(ppt_io)
@@ -405,7 +407,7 @@ def main():
         st.error(f"Fejl ved gemning af PowerPoint: {e}")
         return
 
-    status.text("Status: PowerPoint genereret succesfuldt!")
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: PowerPoint genereret succesfuldt!</div>", unsafe_allow_html=True)
     st.success("PowerPoint genereret succesfuldt!")
     st.download_button("Download PowerPoint", ppt_io,
                        file_name="generated_presentation.pptx",
