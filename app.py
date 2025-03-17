@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from pptx import Presentation
-from pptx.util import Inches, Pt
 import io
 import re
 import requests
@@ -40,10 +39,10 @@ REQUIRED_MAPPING_COLS_ORIG = [
 
 # --- Forventede kolonner i stock-fil ---
 REQUIRED_STOCK_COLS_ORIG = [
-    "productkey",    # Kolonne B: ProductKey
-    "variantname",   # Kolonne D: VariantName
-    "rts",           # Kolonne H: RTS
-    "mto"            # Kolonne I: MTO
+    "productkey",
+    "variantname",
+    "rts",
+    "mto"
 ]
 
 # --- Placeholders til erstatning i templaten ---
@@ -78,10 +77,9 @@ IMAGE_PLACEHOLDERS_ORIG = [
 def group_by_color_and_size(variant_names):
     """
     Grupperer variantnavne efter farve og samler unikke størrelser.
-    For hver variant forventes formatet "Farve - [noget] - Størrelse".
-    Funktionen bruger den første del som farve og den sidste som størrelse.
-    Outputtet bliver i formatet:
-      Farve: Størrelse 1, Størrelse 2, ...
+    For hvert variantnavn forventes formatet: "Farve - [noget] - Størrelse".
+    Funktionen bruger den første del som farve og den sidste del som størrelse.
+    Output: "Farve: Størrelse 1, Størrelse 2, ..."
     Hvis der ikke findes en " - " separator, returneres navnet uændret.
     """
     groups = {}
@@ -89,7 +87,7 @@ def group_by_color_and_size(variant_names):
         if " - " in name:
             parts = name.split(" - ")
             color = parts[0].strip()
-            size = parts[-1].strip()  # Brug den sidste del som størrelse
+            size = parts[-1].strip()  # Den sidste del som størrelse
         else:
             color = name.strip()
             size = ""
@@ -146,7 +144,6 @@ def process_stock_rts_alternative(mapping_row, stock_df):
         st.error(f"KeyError i RTS variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
-    # Brug den avancerede gruppering for at vise "Farve: Størrelse, Størrelse, ..."
     return group_by_color_and_size(unique_variant_names)
 
 def process_stock_mto_alternative(mapping_row, stock_df):
@@ -268,13 +265,23 @@ def duplicate_slide(prs, slide):
     new_slide.shapes._spTree.clear()
     for shape in slide.shapes:
         new_slide.shapes._spTree.append(deepcopy(shape._element))
+    # Fjern eventuelle hidden-tags for at sikre, at sliden ikke er skjult
+    for elem in new_slide._element.xpath('.//p:hiddenslide'):
+        elem.getparent().remove(elem)
     return new_slide
+
+def delete_slide(prs, slide_index):
+    # En kendt workaround for at fjerne en slide
+    slide_id = prs.slides._sldIdLst[slide_index]
+    rId = slide_id.rId
+    prs.part.drop_rel(rId)
+    prs.slides._sldIdLst.remove(slide_id)
 
 # --- Main Streamlit App ---
 def main():
     st.title("PowerPoint Generator App")
     st.write("Indsæt varenumre (Item no) – ét pr. linje:")
-    st.info("Bemærk: Indsæt varenumre uden ekstra mellemrum omkring bindestreger, f.eks. '03084' eller '12345-AB'.")
+    st.info("Bemærk: Indsæt varenumre uden ekstra mellemrum omkring bindestreger, f.eks. '03194', '03094', osv.")
     
     pasted_text = st.text_area("Indsæt varenumre her", height=200)
     if not pasted_text.strip():
@@ -288,9 +295,9 @@ def main():
 
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
     
-    # Opret progress bar og et statusfelt placeret under progress baren
     progress_bar = st.progress(0)
-    status = st.empty()
+    status = st.empty()  # Statusfeltet placeres under progress baren
+
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Filer uploadet og brugerdata oprettet.</div>", unsafe_allow_html=True)
     progress_bar.progress(10)
     
@@ -337,10 +344,10 @@ def main():
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Template-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(70)
     
-    # Lav en kopi af templatesliden, og fjern den originale
+    # Lav en kopi af templatesliden og slet den originale slide
     template_slide = prs.slides[0]
     template_copy = deepcopy(template_slide)
-    prs.slides._sldIdLst.remove(prs.slides._sldIdLst[0])
+    delete_slide(prs, 0)
     
     total_products = len(user_df)
     batch_size = 10
@@ -352,8 +359,8 @@ def main():
         status.markdown(f"<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Behandler batch {batch_index + 1} af {num_batches}...</div>", unsafe_allow_html=True)
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for idx, product in batch_df.iterrows():
-            item_no = product["Item no"]
             slide = duplicate_slide(prs, template_copy)
+            item_no = product["Item no"]
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
@@ -406,8 +413,8 @@ def main():
                         url = ""
                     image_vals[ph] = url
                 replace_image_placeholders_parallel(slide, image_vals)
-        current_progress = 70 + int((batch_index + 1) / num_batches * 30)
-        progress_bar.progress(current_progress)
+        progress = 70 + int((batch_index + 1) / num_batches * 30)
+        progress_bar.progress(progress)
     
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Generering fuldført!</div>", unsafe_allow_html=True)
     ppt_io = io.BytesIO()
