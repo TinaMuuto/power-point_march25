@@ -415,7 +415,7 @@ def main():
                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
     
     if missing_items:
-        st.text_area("Manglende varenumre (kopier her):", value="\n".join(missing_items), height=100)
+        st.text_area("Varenumre uden match:", value="\n".join(missing_items), height=100)
     
     st.session_state.generated_ppt = ppt_io
 
