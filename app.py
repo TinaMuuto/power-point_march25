@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from pptx import Presentation
+from pptx.util import Inches, Pt
 import io
 import re
 import requests
@@ -73,19 +74,21 @@ IMAGE_PLACEHOLDERS_ORIG = [
     "{{Product Lifestyle4}}",
 ]
 
-# --- Gruppere funktioner ---
-
+# --- Almindelig gruppering af variantnavne (simpel version) ---
 def group_by_color_and_size(variant_names):
     """
-    Grupperer variantnavne i formatet "Farve: Størrelse, Størrelse, ..."
-    Hvor farven antages at være alt før den første " - " og størrelsen alt efter den sidste.
+    Denne funktion grupperer variantnavnene efter farve og samler unikke størrelser.
+    For hvert variantnavn forventes formatet: "Farve - [noget] - Størrelse".
+    Den bruger den første del som farve og den sidste som størrelse.
+    Output: "Farve: Størrelse 1, Størrelse 2, ..."
+    Hvis der ikke findes en " - " separator, returneres navnet uændret.
     """
     groups = {}
     for name in variant_names:
         if " - " in name:
             parts = name.split(" - ")
             color = parts[0].strip()
-            size = parts[-1].strip()
+            size = parts[-1].strip()  # den sidste del
         else:
             color = name.strip()
             size = ""
@@ -100,43 +103,46 @@ def group_by_color_and_size(variant_names):
             output_lines.append(color)
     return "\n".join(sorted(output_lines))
 
-def group_by_size_and_color(variant_names):
-    """
-    Grupperer variantnavne i formatet "Størrelse: Farve, Farve, ..."
-    Her antages den sidste del at være størrelsen og den første at være farven.
-    """
-    groups = {}
-    for name in variant_names:
-        if " - " in name:
-            parts = name.split(" - ")
-            size = parts[-1].strip()
-            color = parts[0].strip()
-        else:
-            size = name.strip()
-            color = ""
-        groups.setdefault(size, set())
-        if color:
-            groups[size].add(color)
-    output_lines = []
-    for size, colors in groups.items():
-        if colors:
-            output_lines.append(f"{size}: {', '.join(sorted(colors))}")
-        else:
-            output_lines.append(size)
-    return "\n".join(sorted(output_lines))
+# --- Alternativ logik via en fast defineret produktkonfigurator ---
+class ProductConfigurator:
+    def __init__(self):
+        # Faste produktkombinationer: (overflade, mellemstykke, ben) -> benfarver
+        self.products = {
+            ("Black Linoleum", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+            ("Grey Linoleum", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+            ("Oak Lacquered Oak Veneer", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+            ("Oak Oiled Oak", "Oak Oiled Oak", "Oak Oiled Oak"): ["Black", "Grey", "Sand", "White"],
+            ("Sand Laminate", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+            ("Smoked Oak Oiled Oak", "Smoked Oak Oiled Oak", "Smoked Oak Oiled Oak"): ["Black", "Grey", "Sand", "White"],
+            ("White Laminate", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+        }
+        # Standardstørrelser
+        self.default_sizes = [
+            "170 x 85 cm / 67 x 33.5\"",
+            "225 x 90 cm / 88.5 x 35.5\"",
+            "255 x 108 cm / 100.5 x 42.5\"",
+            "295 x 108 cm / 116 x 42.5\"",
+        ]
+        # Specifikke størrelser for enkelte overflader
+        self.specific_sizes = {
+            "Sand Laminate": [
+                "225 x 90 cm / 88.5 x 35.5\"",
+                "255 x 108 cm / 100.5 x 42.5\"",
+                "295 x 108 cm / 116 x 42.5\"",
+            ]
+        }
+    
+    def get_options(self, product_name):
+        """Hvis produktnavnet indeholder et af overfladenavnene, returnér de fast definerede benfarver og størrelser."""
+        for (surface, core, legs), colors in self.products.items():
+            if surface.lower() in product_name.lower():
+                sizes = self.specific_sizes.get(surface, self.default_sizes)
+                return {"benfarver": colors, "størrelser": sizes}
+        return None
 
-def conditional_group_variant_names(variant_names, product_name):
-    """
-    Hvis produktnavnet indeholder "70/70", anvendes gruppen med størrelse først,
-    ellers anvendes standardgruppen (farve først).
-    """
-    if "70/70" in product_name:
-        return group_by_size_and_color(variant_names)
-    else:
-        return group_by_color_and_size(variant_names)
+configurator = ProductConfigurator()
 
 # --- Almindelige hjælpefunktioner ---
-
 def normalize_text(s):
     return re.sub(r"\s+", "", str(s).replace("\u00A0", " ")).lower()
 
@@ -178,8 +184,14 @@ def process_stock_rts_alternative(mapping_row, stock_df):
         st.error(f"KeyError i RTS variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
+    
+    # Tjek, om produktnavnet matcher en af de konfigurationer
     product_name = str(mapping_row.get(normalize_col("{{Product name}}"), ""))
-    return conditional_group_variant_names(unique_variant_names, product_name)
+    options = configurator.get_options(product_name)
+    if options:
+        return f"Benfarver: {', '.join(options['benfarver'])}\nStørrelser: {', '.join(options['størrelser'])}"
+    else:
+        return group_by_color_and_size(unique_variant_names)
 
 def process_stock_mto_alternative(mapping_row, stock_df):
     product_key = mapping_row.get("productkey", "")
@@ -202,8 +214,13 @@ def process_stock_mto_alternative(mapping_row, stock_df):
         st.error(f"KeyError i MTO variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
+    
     product_name = str(mapping_row.get(normalize_col("{{Product name}}"), ""))
-    return conditional_group_variant_names(unique_variant_names, product_name)
+    options = configurator.get_options(product_name)
+    if options:
+        return f"Benfarver: {', '.join(options['benfarver'])}\nStørrelser: {', '.join(options['størrelser'])}"
+    else:
+        return group_by_color_and_size(unique_variant_names)
 
 @st.cache_data(show_spinner=False)
 def fetch_and_process_image_cached(url, quality=70, max_size=(1200, 1200)):
@@ -301,7 +318,7 @@ def duplicate_slide(prs, slide):
     new_slide.shapes._spTree.clear()
     for shape in slide.shapes:
         new_slide.shapes._spTree.append(deepcopy(shape._element))
-    # Fjern hidden-tags, hvis der er nogen
+    # Fjern eventuelle hidden-tags, så sliden vises korrekt
     for elem in new_slide._element.xpath('.//p:hiddenslide'):
         elem.getparent().remove(elem)
     return new_slide
@@ -332,10 +349,10 @@ def main():
     
     progress_bar = st.progress(0)
     status = st.empty()
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Filer uploadet og brugerdata oprettet.</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Filer uploadet og brugerdata oprettet.</div>", unsafe_allow_html=True)
     progress_bar.progress(10)
     
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Indlæser mapping-fil...</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Indlæser mapping-fil...</div>", unsafe_allow_html=True)
     try:
         mapping_df = pd.read_excel(MAPPING_FILE_PATH)
         mapping_df.columns = [normalize_col(col) for col in mapping_df.columns]
@@ -347,11 +364,11 @@ def main():
     if missing_mapping_cols:
         st.error(f"Mapping-filen mangler kolonner: {missing_mapping_cols}.")
         return
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Mapping-fil indlæst.</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Mapping-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(30)
     MAPPING_PRODUCT_CODE_KEY = normalize_col("{{Product code}}")
     
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Indlæser stock-fil...</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Indlæser stock-fil...</div>", unsafe_allow_html=True)
     try:
         stock_df = pd.read_excel(STOCK_FILE_PATH)
         stock_df.columns = [normalize_col(col) for col in stock_df.columns]
@@ -363,10 +380,10 @@ def main():
     if missing_stock_cols:
         st.error(f"Stock-filen mangler kolonner: {missing_stock_cols}.")
         return
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Stock-fil indlæst.</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Stock-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(50)
     
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Indlæser PowerPoint-template...</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Indlæser PowerPoint-template...</div>", unsafe_allow_html=True)
     try:
         prs = Presentation(TEMPLATE_FILE_PATH)
     except Exception as e:
@@ -375,9 +392,10 @@ def main():
     if len(prs.slides) < 1:
         st.error("Template-filen skal indeholde mindst én slide.")
         return
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Template-fil indlæst.</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Template-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(70)
     
+    # Lav en kopi af den originale templateslide og slet den originale
     template_slide = prs.slides[0]
     template_copy = deepcopy(template_slide)
     delete_slide(prs, 0)
@@ -385,11 +403,11 @@ def main():
     total_products = len(user_df)
     batch_size = 10
     num_batches = math.ceil(total_products / batch_size)
-    status.markdown(f"<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: {total_products} varer opdelt i {num_batches} batch(es).</div>", unsafe_allow_html=True)
+    status.markdown(f"<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: {total_products} varer opdelt i {num_batches} batch(es).</div>", unsafe_allow_html=True)
     
     missing_items = []
     for batch_index in range(num_batches):
-        status.markdown(f"<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Behandler batch {batch_index + 1} af {num_batches}...</div>", unsafe_allow_html=True)
+        status.markdown(f"<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Behandler batch {batch_index + 1} af {num_batches}...</div>", unsafe_allow_html=True)
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for idx, product in batch_df.iterrows():
             item_no = product["Item no"]
@@ -449,7 +467,7 @@ def main():
         progress = 70 + int((batch_index + 1) / num_batches * 30)
         progress_bar.progress(progress)
     
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: Generering fuldført!</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Generering fuldført!</div>", unsafe_allow_html=True)
     ppt_io = io.BytesIO()
     try:
         prs.save(ppt_io)
@@ -458,7 +476,7 @@ def main():
         st.error(f"Fejl ved gemning af PowerPoint: {e}")
         return
 
-    status.markdown("<div style='background-color:#f0f0f0; padding:10px; border-radius:5px;'>Status: PowerPoint genereret succesfuldt!</div>", unsafe_allow_html=True)
+    status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: PowerPoint genereret succesfuldt!</div>", unsafe_allow_html=True)
     st.success("PowerPoint genereret succesfuldt!")
     st.download_button("Download PowerPoint", ppt_io,
                        file_name="generated_presentation.pptx",
