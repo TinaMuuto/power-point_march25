@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from pptx import Presentation
+from pptx.util import Inches, Pt
 import io
 import re
 import requests
@@ -34,7 +35,7 @@ REQUIRED_MAPPING_COLS_ORIG = [
     "{{Product Lifestyle2}}",
     "{{Product Lifestyle3}}",
     "{{Product Lifestyle4}}",
-    "ProductKey"  # Mapping-filens ProductKey (uden klammer)
+    "ProductKey"
 ]
 
 # --- Forventede kolonner i stock-fil ---
@@ -73,12 +74,12 @@ IMAGE_PLACEHOLDERS_ORIG = [
     "{{Product Lifestyle4}}",
 ]
 
-# --- Avanceret gruppering af VariantName ---
+# --- Almindelig gruppering af variantnavne (simpel version) ---
 def group_by_color_and_size(variant_names):
     """
-    Grupperer variantnavne efter farve og samler unikke størrelser.
+    Denne funktion grupperer variantnavnene efter farve og samler unikke størrelser.
     For hvert variantnavn forventes formatet: "Farve - [noget] - Størrelse".
-    Funktionen bruger den første del som farve og den sidste del som størrelse.
+    Den bruger den første del som farve og den sidste som størrelse.
     Output: "Farve: Størrelse 1, Størrelse 2, ..."
     Hvis der ikke findes en " - " separator, returneres navnet uændret.
     """
@@ -87,7 +88,7 @@ def group_by_color_and_size(variant_names):
         if " - " in name:
             parts = name.split(" - ")
             color = parts[0].strip()
-            size = parts[-1].strip()  # Den sidste del som størrelse
+            size = parts[-1].strip()  # den sidste del
         else:
             color = name.strip()
             size = ""
@@ -101,6 +102,45 @@ def group_by_color_and_size(variant_names):
         else:
             output_lines.append(color)
     return "\n".join(sorted(output_lines))
+
+# --- Alternativ logik via en fast defineret produktkonfigurator ---
+class ProductConfigurator:
+    def __init__(self):
+        # Faste produktkombinationer: (overflade, mellemstykke, ben) -> benfarver
+        self.products = {
+            ("Black Linoleum", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+            ("Grey Linoleum", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+            ("Oak Lacquered Oak Veneer", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+            ("Oak Oiled Oak", "Oak Oiled Oak", "Oak Oiled Oak"): ["Black", "Grey", "Sand", "White"],
+            ("Sand Laminate", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+            ("Smoked Oak Oiled Oak", "Smoked Oak Oiled Oak", "Smoked Oak Oiled Oak"): ["Black", "Grey", "Sand", "White"],
+            ("White Laminate", "Plywood", "Plywood"): ["Black", "Grey", "Sand", "White"],
+        }
+        # Standardstørrelser
+        self.default_sizes = [
+            "170 x 85 cm / 67 x 33.5\"",
+            "225 x 90 cm / 88.5 x 35.5\"",
+            "255 x 108 cm / 100.5 x 42.5\"",
+            "295 x 108 cm / 116 x 42.5\"",
+        ]
+        # Specifikke størrelser for enkelte overflader
+        self.specific_sizes = {
+            "Sand Laminate": [
+                "225 x 90 cm / 88.5 x 35.5\"",
+                "255 x 108 cm / 100.5 x 42.5\"",
+                "295 x 108 cm / 116 x 42.5\"",
+            ]
+        }
+    
+    def get_options(self, product_name):
+        """Hvis produktnavnet indeholder et af overfladenavnene, returnér de fast definerede benfarver og størrelser."""
+        for (surface, core, legs), colors in self.products.items():
+            if surface.lower() in product_name.lower():
+                sizes = self.specific_sizes.get(surface, self.default_sizes)
+                return {"benfarver": colors, "størrelser": sizes}
+        return None
+
+configurator = ProductConfigurator()
 
 # --- Almindelige hjælpefunktioner ---
 def normalize_text(s):
@@ -144,7 +184,14 @@ def process_stock_rts_alternative(mapping_row, stock_df):
         st.error(f"KeyError i RTS variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
-    return group_by_color_and_size(unique_variant_names)
+    
+    # Tjek, om produktnavnet matcher en af de konfigurationer
+    product_name = str(mapping_row.get(normalize_col("{{Product name}}"), ""))
+    options = configurator.get_options(product_name)
+    if options:
+        return f"Benfarver: {', '.join(options['benfarver'])}\nStørrelser: {', '.join(options['størrelser'])}"
+    else:
+        return group_by_color_and_size(unique_variant_names)
 
 def process_stock_mto_alternative(mapping_row, stock_df):
     product_key = mapping_row.get("productkey", "")
@@ -167,7 +214,13 @@ def process_stock_mto_alternative(mapping_row, stock_df):
         st.error(f"KeyError i MTO variantname: {e}")
         return ""
     unique_variant_names = list(dict.fromkeys(variant_names))
-    return group_by_color_and_size(unique_variant_names)
+    
+    product_name = str(mapping_row.get(normalize_col("{{Product name}}"), ""))
+    options = configurator.get_options(product_name)
+    if options:
+        return f"Benfarver: {', '.join(options['benfarver'])}\nStørrelser: {', '.join(options['størrelser'])}"
+    else:
+        return group_by_color_and_size(unique_variant_names)
 
 @st.cache_data(show_spinner=False)
 def fetch_and_process_image_cached(url, quality=70, max_size=(1200, 1200)):
@@ -265,13 +318,12 @@ def duplicate_slide(prs, slide):
     new_slide.shapes._spTree.clear()
     for shape in slide.shapes:
         new_slide.shapes._spTree.append(deepcopy(shape._element))
-    # Fjern eventuelle hidden-tags for at sikre, at sliden ikke er skjult
+    # Fjern eventuelle hidden-tags, så sliden vises korrekt
     for elem in new_slide._element.xpath('.//p:hiddenslide'):
         elem.getparent().remove(elem)
     return new_slide
 
 def delete_slide(prs, slide_index):
-    # En kendt workaround for at fjerne en slide
     slide_id = prs.slides._sldIdLst[slide_index]
     rId = slide_id.rId
     prs.part.drop_rel(rId)
@@ -296,8 +348,7 @@ def main():
     user_df = pd.DataFrame({"Item no": varenumre, "Product name": [""] * len(varenumre)})
     
     progress_bar = st.progress(0)
-    status = st.empty()  # Statusfeltet placeres under progress baren
-
+    status = st.empty()
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Filer uploadet og brugerdata oprettet.</div>", unsafe_allow_html=True)
     progress_bar.progress(10)
     
@@ -344,7 +395,7 @@ def main():
     status.markdown("<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Template-fil indlæst.</div>", unsafe_allow_html=True)
     progress_bar.progress(70)
     
-    # Lav en kopi af templatesliden og slet den originale slide
+    # Lav en kopi af den originale templateslide og slet den originale
     template_slide = prs.slides[0]
     template_copy = deepcopy(template_slide)
     delete_slide(prs, 0)
@@ -359,8 +410,8 @@ def main():
         status.markdown(f"<div style='background-color:#f0f0f0; padding: 10px; border-radius: 5px;'>Status: Behandler batch {batch_index + 1} af {num_batches}...</div>", unsafe_allow_html=True)
         batch_df = user_df.iloc[batch_index * batch_size : (batch_index + 1) * batch_size]
         for idx, product in batch_df.iterrows():
-            slide = duplicate_slide(prs, template_copy)
             item_no = product["Item no"]
+            slide = duplicate_slide(prs, template_copy)
             mapping_row = find_mapping_row(item_no, mapping_df, MAPPING_PRODUCT_CODE_KEY)
             if mapping_row is None:
                 missing_items.append(item_no)
